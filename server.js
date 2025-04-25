@@ -41,12 +41,12 @@ app.post('/api/translate', async (req, res) => {
 });
 
 async function translateWithAI(text) {
-    const prompt = `根据以下逐字释义（用|隔开），选择最合适含义将其连成通顺句子：${text}`;
+    const prompt = `根据以下逐字释义（用|隔开），选择最合适含义将其连成通顺句子(尽量少token)：${text}`;
     
     const response = await axios.post(
-        'https://api.deepseek.com/v1/chat/completions', // 假设DeepSeek接口格式
+        'https://api.siliconflow.cn/v1', 
         {
-            model: "deepseek-chat",
+            model: "deepseek-ai/DeepSeek-V2.5",
             messages: [{
                 role: "user",
                 content: prompt
