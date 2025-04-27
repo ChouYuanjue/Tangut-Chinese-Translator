@@ -1,67 +1,54 @@
-// server.js
 const express = require('express');
+const fetch = require('node-fetch');
+const { OpenAI } = require('openai');
+const bodyParser = require('body-parser');
+
 const app = express();
-const axios = require('axios');
-const cheerio = require('cheerio');
-require('dotenv').config();
+const port = process.env.PORT || 3000;
 
 app.use(express.static('public'));
-app.use(express.json());
+app.use(bodyParser.json());
 
-// 代理西夏字释义查询
-app.post('/api/translate', async (req, res) => {
-    try {
-        const chars = [...req.body.text];
-        let definitions = [];
-        
-        // 查询每个字符释义
-        for (const char of chars) {
-            const encoded = encodeURIComponent(char);
-            const { data } = await axios.get(
-                `http://www.ccamc.co/tangut.php?n4694=${encoded}`,
-                { headers: { 'User-Agent': 'Mozilla/5.0' } }
-            );
-            
-            const $ = cheerio.load(data);
-            const definition = $('div.tangut p').eq(1).text()
-                .replace(/\u00a0/g, ' ')
-                .split('<')[0];
-            
-            definitions.push(definition || '未知');
-            await new Promise(r => setTimeout(r, 500)); // 请求间隔
-        }
-
-        // 调用DeepSeek翻译
-        const translation = await translateWithAI(definitions.join('|'));
-        res.json({ translation });
-        
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  baseURL: 'https://api.siliconflow.cn/v1'
 });
 
-async function translateWithAI(text) {
-    const prompt = `根据以下逐字释义（用|隔开），选择最合适含义将其连成通顺句子(尽量少token)：${text}`;
-    
-    const response = await axios.post(
-        'https://api.siliconflow.cn/v1', 
-        {
-            model: "deepseek-ai/DeepSeek-V2.5",
-            messages: [{
-                role: "user",
-                content: prompt
-            }],
-            temperature: 0.1
-        },
-        {
-            headers: {
-                'Authorization': `Bearer ${process.env.DEEPSEEK_KEY}`,
-                'Content-Type': 'application/json'
-            }
-        }
-    );
-    
-    return response.data.choices[0].message.content.trim();
+// 抓取单个西夏文字符释义
+async function getCharDefinition(char) {
+  const url = 'http://www.ccamc.co/tangut.php?n4694=' + encodeURIComponent(char);
+  const resp = await fetch(url);
+  const text = await resp.text();
+  const regex = /2012版《简明夏汉字典》释义<\/font><\/font><\/b><\/p><p><font style="vertical-align: inherit;"><font style="vertical-align: inherit;">([\s\S]*?)<\/font><\/font><code>/;
+  const match = text.match(regex);
+  return match ? match[1].trim() : '';
 }
 
-app.listen(3000, () => console.log('Server running'));
+// 翻译接口
+app.post('/api/translate', async (req, res) => {
+  try {
+    const { text } = req.body;
+    const defs = [];
+    for (const char of text) {
+      if (char.trim()) {
+        const def = await getCharDefinition(char);
+        defs.push(def);
+      }
+    }
+    const joined = defs.join('|');
+    const prompt = `根据以下逐字释义（用|隔开），选择最合适含义将其连成通顺句子(尽量少token)：${joined}`;
+    const response = await openai.chat.completions.create({
+      model: 'deepseek-ai/DeepSeek-V2.5',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7,
+      max_tokens: 4096
+    });
+    const translation = response.choices[0].message.content;
+    res.json({ translation });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: '服务器错误，请稍后重试' });
+  }
+});
+
+app.listen(port, () => console.log(`Server listening on port ${port}`));
